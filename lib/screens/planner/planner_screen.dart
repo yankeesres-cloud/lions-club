@@ -638,6 +638,25 @@ class _ProgramWorkScreenState extends State<ProgramWorkScreen> {
     setState(() => _program = _program!.copyWith(checklist: next));
   }
 
+  Future<void> _editAttendance() async {
+    final p = _program;
+    if (p == null) return;
+    await MemberStore.ensureLoaded();
+    if (!mounted) return;
+    final selected = await pickClubMembers(
+      context: context,
+      members: MemberStore.current,
+      selectedIds: p.attendanceNormalized,
+      title: 'Program haziri (attendance)',
+      maxSelection: 200,
+    );
+    if (!mounted || selected == null) return;
+    final next = p.copyWith(attendedMemberIds: selected);
+    await PlannerStore.upsert(next);
+    if (!mounted) return;
+    setState(() => _program = next);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -690,6 +709,49 @@ class _ProgramWorkScreenState extends State<ProgramWorkScreen> {
                 activeColor: AppTheme.purple,
               ),
             ),
+          const SizedBox(height: 16),
+          Text(
+            'Haziri / Attendance (${p.attendanceNormalized.length})',
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Jo member program mein aaye — unki star rating badhegi',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _editAttendance,
+            icon: const Icon(Icons.how_to_reg_outlined),
+            label: Text(
+              p.attendanceNormalized.isEmpty
+                  ? 'Haziri mark karein'
+                  : '${p.attendanceNormalized.length} members — badlein',
+            ),
+          ),
+          if (p.attendanceNormalized.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                for (final id in p.attendanceNormalized.take(12))
+                  Chip(
+                    label: Text(
+                      MemberStore.byId(id)?.displayName ?? 'Member',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                if (p.attendanceNormalized.length > 12)
+                  Chip(
+                    label: Text('+${p.attendanceNormalized.length - 12}'),
+                    visualDensity: VisualDensity.compact,
+                  ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 72),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -863,6 +925,7 @@ class _ProgramFormScreenState extends State<ProgramFormScreen> {
         planYear: _planYear,
         estimatedBudget: budget,
         checklist: _checklist,
+        attendedMemberIds: widget.existing?.attendedMemberIds ?? const [],
       ),
     );
     if (!mounted) return;

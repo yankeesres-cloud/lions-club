@@ -119,9 +119,14 @@ extension ClubRoleX on ClubRole {
           AppModule.settings,
         };
       case ClubRole.member:
+        // Pilot: member desk se bhi Members / Board / Guests / Accounts khulen.
         return {
           AppModule.dashboard,
+          AppModule.members,
+          AppModule.officers,
+          AppModule.guests,
           AppModule.planner,
+          AppModule.accounts,
           AppModule.birthday,
           AppModule.meetings,
           AppModule.gallery,

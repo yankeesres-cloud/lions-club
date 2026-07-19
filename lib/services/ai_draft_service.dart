@@ -1,6 +1,10 @@
 import '../models/club_role.dart';
+import '../models/member.dart';
 import '../models/post_desk.dart';
+import 'app_clock.dart';
+import 'board_store.dart';
 import 'club_settings_store.dart';
+import 'star_rating_service.dart';
 
 /// Local AI draft helper (template-based) — offline, Lions Club tone.
 class AiDraftService {
@@ -26,6 +30,151 @@ class AiDraftService {
       return _en(desk, club, prog, when, where, guest, who, role);
     }
     return _hi(desk, club, prog, when, where, guest, who, role);
+  }
+
+  /// Club wall birthday — naam, umr, business, board post, star rating se personalized.
+  static String birthdayWallWishForMember(
+    Member member, {
+    bool forTomorrow = false,
+  }) {
+    final clubLabel = _clubLabel();
+    final name = member.displayName.trim().isEmpty
+        ? 'लायन्स मित्र'
+        : member.displayName.trim();
+    final honor = member.gender == MemberGender.female ? 'लायनेस' : 'लायन';
+    final whenHi = forTomorrow ? 'कल' : 'आज';
+    final age = member.ageYears(asOf: AppClock.today);
+    final business = member.profession.trim();
+    final post = _boardPostLabel(member.id);
+    final stars = StarRatingService.starsFor(member.id);
+    final praise = _achaiyanLines(
+      age: age,
+      business: business,
+      post: post,
+      stars: stars,
+      gender: member.gender,
+    );
+
+    return '🦁 आदरणीय $honor $name जी,\n\n'
+        '$whenHi आपके जन्मदिन पर $clubLabel परिवार की ओर से हार्दिक शुभकामनाएँ!\n\n'
+        '$praise\n\n'
+        'सुख, स्वास्थ्य, समृद्धि और लंबी आयु की कामना। आपका यह वर्ष सेवा और सफलता से भरा रहे।\n\n'
+        'Happy Birthday! 🎂\n'
+        'जय लायन्स, जय हिन्द।';
+  }
+
+  /// Club wall anniversary — couple / member ke details se.
+  static String anniversaryWallWishForMembers(
+    List<Member> mates, {
+    bool forTomorrow = false,
+  }) {
+    final clubLabel = _clubLabel();
+    final whenHi = forTomorrow ? 'कल' : 'आज';
+    final names = mates
+        .map((m) => m.displayName.trim())
+        .where((n) => n.isNotEmpty)
+        .toList();
+    final who = names.isEmpty
+        ? 'लायन्स दंपति'
+        : (names.length == 1 ? names.first : names.join(' एवं '));
+
+    final bits = <String>[];
+    for (final m in mates) {
+      final business = m.profession.trim();
+      final post = _boardPostLabel(m.id);
+      final part = <String>[];
+      if (business.isNotEmpty) part.add(business);
+      if (post.isNotEmpty) part.add(post);
+      if (m.stars > 0) part.add('${'★' * m.stars} (${m.stars}/5)');
+      if (part.isNotEmpty) {
+        bits.add('${m.displayName.trim()} — ${part.join(', ')}');
+      }
+    }
+
+    final mid = bits.isEmpty
+        ? 'आपका प्रेम, समझ और परिवार के प्रति समर्पण हमारे क्लब के लिए प्रेरणा है।'
+        : 'क्लब परिवार आपकी उपलब्धियों का सम्मान करता है:\n${bits.map((b) => '• $b').join('\n')}\n\n'
+            'आपके वैवाहिक जीवन की मधुरता और सेवा-भाव दोनों अनुकरणीय हैं।';
+
+    return '💍 आदरणीय $who,\n\n'
+        '$whenHi आपके विवाहोत्सव पर $clubLabel की हार्दिक बधाई!\n\n'
+        '$mid\n\n'
+        'साथ-साथ सुख, शांति और समृद्धि बनी रहे।\n\n'
+        'Happy Anniversary! ❤️\n'
+        'जय लायन्स।';
+  }
+
+  static String _clubLabel() {
+    final club = ClubSettingsStore.current.clubName.trim();
+    return club.isEmpty ? 'Lions Club' : club;
+  }
+
+  static String _boardPostLabel(String memberId) {
+    final posts = BoardStore.postsForMember(memberId)
+        .map((p) => p.title.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    if (posts.isEmpty) return '';
+    return posts.join(' / ');
+  }
+
+  /// Umr, business, post, stars — Narendra Singhal style achaiyan paragraph.
+  static String _achaiyanLines({
+    required int? age,
+    required String business,
+    required String post,
+    required int stars,
+    required MemberGender gender,
+  }) {
+    final lines = <String>[];
+
+    if (age != null) {
+      lines.add(
+        'लगभग $age वर्षों की समृद्ध जीवन-यात्रा के साथ आप अनुभव और समझ के प्रतीक हैं।',
+      );
+    }
+    if (business.isNotEmpty) {
+      lines.add(
+        'व्यवसाय / पेशे में ($business) आपकी मेहनत और सफलता क्लब परिवार के लिए गर्व की बात है।',
+      );
+    }
+    if (post.isNotEmpty) {
+      lines.add(
+        'क्लब में "$post" के पद पर आपके नेतृत्व, सहयोग और सेवा ने सबको प्रेरित किया है।',
+      );
+    } else {
+      lines.add(
+        'लायन्स आंदोलन में आपकी सक्रिय सदस्यता और सेवा-भाव सराहनीय है।',
+      );
+    }
+    if (stars > 0) {
+      final starBar = '★' * stars + '☆' * (5 - stars);
+      lines.add(
+        'आपकी क्लब स्टार रेटिंग $starBar ($stars/5) — '
+        '${_starPraise(stars, gender)}',
+      );
+    }
+
+    if (lines.isEmpty) {
+      return 'आपकी सेवा, मित्रता और सहयोग ${_clubLabel()} की पहचान हैं।';
+    }
+    return lines.join('\n');
+  }
+
+  static String _starPraise(int stars, MemberGender gender) {
+    final aap = gender == MemberGender.female ? 'आप' : 'आप';
+    switch (stars) {
+      case 5:
+        return '$aap क्लब के सितारे हैं; आपकी उपलब्धियाँ अनुकरणीय हैं।';
+      case 4:
+        return 'उत्कृष्ट योगदान — क्लब आप पर गर्व करता है।';
+      case 3:
+        return 'निरंतर सहयोग और अच्छी सेवा के लिए धन्यवाद।';
+      case 2:
+        return 'आपकी भागीदारी महत्वपूर्ण है; आगे भी साथ बने रहें।';
+      default:
+        return 'क्लब परिवार में आपका स्वागत और सहयोग अमूल्य है।';
+    }
   }
 
   static String _hi(

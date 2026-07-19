@@ -49,6 +49,7 @@ class PlannedProgram {
     this.planYear = 0,
     this.estimatedBudget = 0,
     this.checklist = const [],
+    this.attendedMemberIds = const [],
   });
 
   static const maxPcs = 4;
@@ -73,6 +74,8 @@ class PlannedProgram {
   /// Anumanit budget (₹)
   final double estimatedBudget;
   final List<ProgramChecklistItem> checklist;
+  /// Program mein hazir members — star rating ke liye.
+  final List<String> attendedMemberIds;
 
   bool get hasPc => pcMemberIds.any((e) => e.trim().isNotEmpty);
   bool get hasDirector =>
@@ -198,6 +201,18 @@ class PlannedProgram {
   int get checklistDoneCount => checklist.where((c) => c.done).length;
   int get checklistTotal => checklist.length;
 
+  List<String> get attendanceNormalized {
+    final out = <String>[];
+    final seen = <String>{};
+    for (final raw in attendedMemberIds) {
+      final id = raw.trim();
+      if (id.isEmpty || seen.contains(id)) continue;
+      seen.add(id);
+      out.add(id);
+    }
+    return out;
+  }
+
   PlannedProgram copyWith({
     String? id,
     String? title,
@@ -212,6 +227,7 @@ class PlannedProgram {
     int? planYear,
     double? estimatedBudget,
     List<ProgramChecklistItem>? checklist,
+    List<String>? attendedMemberIds,
     bool clearPcs = false,
     bool clearDirector = false,
   }) {
@@ -231,6 +247,7 @@ class PlannedProgram {
       planYear: planYear ?? this.planYear,
       estimatedBudget: estimatedBudget ?? this.estimatedBudget,
       checklist: checklist ?? this.checklist,
+      attendedMemberIds: attendedMemberIds ?? this.attendedMemberIds,
     );
   }
 
@@ -250,6 +267,7 @@ class PlannedProgram {
         'planYear': planYear,
         'estimatedBudget': estimatedBudget,
         'checklist': checklist.map((e) => e.toJson()).toList(),
+        'attendedMemberIds': attendanceNormalized,
       };
 
   factory PlannedProgram.fromJson(Map<String, dynamic> j) {
@@ -317,6 +335,18 @@ class PlannedProgram {
     }
     if (vpLevel < 0 || vpLevel > 3) vpLevel = 0;
 
+    final attended = <String>[];
+    final seenAtt = <String>{};
+    final rawAtt = j['attendedMemberIds'] ?? j['attendance'];
+    if (rawAtt is List) {
+      for (final e in rawAtt) {
+        final id = e.toString().trim();
+        if (id.isEmpty || seenAtt.contains(id)) continue;
+        seenAtt.add(id);
+        attended.add(id);
+      }
+    }
+
     return PlannedProgram(
       id: (j['id'] ?? '').toString(),
       title: (j['title'] ?? '').toString(),
@@ -335,6 +365,7 @@ class PlannedProgram {
           : int.tryParse('${j['planYear'] ?? ''}') ?? 0,
       estimatedBudget: budget,
       checklist: items.isEmpty ? defaultChecklist() : items,
+      attendedMemberIds: attended,
     );
   }
 

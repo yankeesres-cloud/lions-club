@@ -22,6 +22,7 @@ class MemberStore {
       _cache = _decodeV2(rawV2);
       _loaded = true;
       await repairSpouseLinks();
+      await relinkOrphanCouples();
       return current;
     }
 
@@ -31,6 +32,7 @@ class MemberStore {
       _cache = _migrateV1(rawV1);
       _loaded = true;
       await repairSpouseLinks();
+      await relinkOrphanCouples();
       return current;
     }
 
@@ -66,7 +68,7 @@ class MemberStore {
             out.addAll(Member.fromLegacyCoupleRow(j));
           } else {
             final one = Member.fromJson(j);
-            if (one.isSane) out.add(one.copyWith()); // ensure v2 shape on save
+            if (one.isSane) out.add(one.copyWith());
           }
         } else {
           final one = Member.fromJson(j);
@@ -84,6 +86,13 @@ class MemberStore {
     return load();
   }
 
+  /// Force reload + couple relink (Members screen se).
+  static Future<int> reloadAndRelinkCouples() async {
+    _loaded = false;
+    await load();
+    return current.where((m) => m.membershipType == MembershipType.couple).length;
+  }
+
   static Future<void> _persist() async {
     final p = await SharedPreferences.getInstance();
     await p.setString(
@@ -95,10 +104,12 @@ class MemberStore {
   static Future<void> upsert(Member member) async {
     await ensureLoaded();
     if (!member.isSane) return;
-    // Never allow self as spouse.
     var safe = member;
     if (safe.spouseId == safe.id) {
-      safe = safe.copyWith(clearSpouse: true, membershipType: MembershipType.single);
+      safe = safe.copyWith(
+        clearSpouse: true,
+        membershipType: MembershipType.single,
+      );
     }
     final i = _cache.indexWhere((m) => m.id == safe.id);
     if (i >= 0) {
@@ -106,7 +117,6 @@ class MemberStore {
     } else {
       _cache = [..._cache, safe];
     }
-    // Keep spouse link bidirectional when set.
     if (safe.hasSpouse) {
       final si = _cache.indexWhere((m) => m.id == safe.spouseId);
       if (si >= 0) {
@@ -173,20 +183,25 @@ class MemberStore {
   static Future<int> replaceAll(List<Member> members) async {
     _cache = members
         .where((m) => m.isSane)
-        .map((m) => m.spouseId == m.id
-            ? m.copyWith(clearSpouse: true, membershipType: MembershipType.single)
-            : m)
+        .map(
+          (m) => m.spouseId == m.id
+              ? m.copyWith(
+                  clearSpouse: true,
+                  membershipType: MembershipType.single,
+                )
+              : m,
+        )
         .toList();
     _loaded = true;
     await repairSpouseLinks();
+    await relinkOrphanCouples();
     return _cache.length;
   }
 
   /// Merge import with stable IDs + correct spouse remapping.
-  /// (Couple often share one phone — gender must stay in dedupe key.)
   static Future<int> mergeImported(List<Member> incoming) async {
     await ensureLoaded();
-    final idMap = <String, String>{}; // importId → storedId
+    final idMap = <String, String>{};
     var added = 0;
 
     for (final m in incoming.where((m) => m.isSane)) {
@@ -198,39 +213,45 @@ class MemberStore {
         _cache[existing] = m.copyWith(
           id: old.id,
           clearSpouse: true,
+          membershipType: MembershipType.single,
           proposer: m.proposer.trim().isNotEmpty ? m.proposer : old.proposer,
           address: m.address.trim().isNotEmpty ? m.address : old.address,
           photo: m.photo.trim().isNotEmpty ? m.photo : old.photo,
-          anniversary:
-              m.anniversary.trim().isNotEmpty ? m.anniversary : old.anniversary,
+          anniversary: m.anniversary.trim().isNotEmpty
+              ? m.anniversary
+              : old.anniversary,
         );
       } else {
         idMap[m.id] = m.id;
-        _cache.add(m.copyWith(clearSpouse: true));
+        _cache.add(
+          m.copyWith(
+            clearSpouse: true,
+            membershipType: MembershipType.single,
+          ),
+        );
         added++;
       }
     }
 
-    // Second pass: restore couple links using remapped IDs.
+    final linked = <String>{};
     for (final m in incoming.where((x) => x.isSane && x.hasSpouse)) {
       final selfId = idMap[m.id];
       final spouseStoredId = idMap[m.spouseId];
       if (selfId == null || spouseStoredId == null || selfId == spouseStoredId) {
         continue;
       }
-      final i = _cache.indexWhere((e) => e.id == selfId);
-      if (i < 0) continue;
-      _cache[i] = _cache[i].copyWith(
-        spouseId: spouseStoredId,
-        membershipType: MembershipType.couple,
-      );
+      final pair = [selfId, spouseStoredId]..sort();
+      final pk = '${pair[0]}|${pair[1]}';
+      if (linked.contains(pk)) continue;
+      linked.add(pk);
+      await linkSpouses(selfId, spouseStoredId);
     }
 
     await repairSpouseLinks();
+    await relinkOrphanCouples();
     return added;
   }
 
-  /// Fix self-links / missing spouse targets from older buggy imports.
   static Future<void> repairSpouseLinks() async {
     if (!_loaded) return;
     var changed = false;
@@ -254,14 +275,19 @@ class MemberStore {
         changed = true;
       }
     }
-    // Ensure bidirectional where both sides exist.
     for (var i = 0; i < _cache.length; i++) {
       final m = _cache[i];
       if (!m.hasSpouse || m.spouseId == m.id) continue;
       final si = _cache.indexWhere((e) => e.id == m.spouseId);
       if (si < 0) continue;
       final spouse = _cache[si];
-      if (spouse.spouseId != m.id) {
+      if (spouse.spouseId != m.id ||
+          m.membershipType != MembershipType.couple ||
+          spouse.membershipType != MembershipType.couple) {
+        _cache[i] = m.copyWith(
+          spouseId: spouse.id,
+          membershipType: MembershipType.couple,
+        );
         _cache[si] = spouse.copyWith(
           spouseId: m.id,
           membershipType: MembershipType.couple,
@@ -272,7 +298,105 @@ class MemberStore {
     if (changed) await _persist();
   }
 
-  /// Phone + gender — couple often share one family phone.
+  /// Excel couples jo single ban gaye — phone / anniversary / id se dubara jodo.
+  static Future<int> relinkOrphanCouples() async {
+    if (!_loaded) return 0;
+    final used = <String>{};
+    for (final m in _cache) {
+      if (!m.hasSpouse || m.spouseId == m.id) continue;
+      if (byId(m.spouseId) == null) continue;
+      used.add(m.id);
+      used.add(m.spouseId);
+    }
+
+    var pairs = 0;
+
+    bool tryLink(Member a, Member b) {
+      if (a.id == b.id) return false;
+      if (used.contains(a.id) || used.contains(b.id)) return false;
+      if (a.gender == b.gender) return false;
+      final ia = _cache.indexWhere((e) => e.id == a.id);
+      final ib = _cache.indexWhere((e) => e.id == b.id);
+      if (ia < 0 || ib < 0) return false;
+      _cache[ia] = _cache[ia].copyWith(
+        spouseId: b.id,
+        membershipType: MembershipType.couple,
+      );
+      _cache[ib] = _cache[ib].copyWith(
+        spouseId: a.id,
+        membershipType: MembershipType.couple,
+      );
+      used.add(a.id);
+      used.add(b.id);
+      pairs++;
+      return true;
+    }
+
+    final byBase = <String, List<Member>>{};
+    for (final m in _cache) {
+      if (used.contains(m.id)) continue;
+      final id = m.id;
+      String? base;
+      if (id.endsWith('_m') || id.endsWith('_M')) {
+        base = id.substring(0, id.length - 2);
+      } else if (id.endsWith('_f') || id.endsWith('_F')) {
+        base = id.substring(0, id.length - 2);
+      }
+      if (base == null || base.isEmpty) continue;
+      byBase.putIfAbsent(base, () => []).add(m);
+    }
+    for (final group in byBase.values) {
+      Member? male;
+      Member? female;
+      for (final g in group) {
+        if (g.gender == MemberGender.male) male = g;
+        if (g.gender == MemberGender.female) female = g;
+      }
+      if (male != null && female != null) tryLink(male, female);
+    }
+
+    final byPhone = <String, List<Member>>{};
+    for (final m in _cache) {
+      if (used.contains(m.id)) continue;
+      final phone = m.phone.replaceAll(RegExp(r'\D'), '');
+      if (phone.length < 8) continue;
+      byPhone.putIfAbsent(phone, () => []).add(m);
+    }
+    for (final group in byPhone.values) {
+      final males = group.where((e) => e.gender == MemberGender.male).toList();
+      final females =
+          group.where((e) => e.gender == MemberGender.female).toList();
+      if (males.length == 1 && females.length == 1) {
+        tryLink(males.first, females.first);
+      }
+    }
+
+    final byAnn = <String, List<Member>>{};
+    for (final m in _cache) {
+      if (used.contains(m.id)) continue;
+      final key = _anniversaryKey(m);
+      if (key.isEmpty) continue;
+      byAnn.putIfAbsent(key, () => []).add(m);
+    }
+    for (final group in byAnn.values) {
+      final males = group.where((e) => e.gender == MemberGender.male).toList();
+      final females =
+          group.where((e) => e.gender == MemberGender.female).toList();
+      if (males.length == 1 && females.length == 1) {
+        tryLink(males.first, females.first);
+      }
+    }
+
+    if (pairs > 0) await _persist();
+    return pairs;
+  }
+
+  static String _anniversaryKey(Member m) {
+    final d = Member.parseFlexibleDate(m.anniversary);
+    if (d == null) return '';
+    return '${d.month}_${d.day}';
+  }
+
   static String _dedupeKey(Member m) {
     final phone = m.phone.replaceAll(RegExp(r'\D'), '');
     if (phone.isNotEmpty) return 'p:$phone|${m.gender.name}';
@@ -280,6 +404,39 @@ class MemberStore {
   }
 
   static String newId() => 'm_${DateTime.now().microsecondsSinceEpoch}';
+
+  static const _demoMemberIds = <String>[
+    'demo_narendra_singhal',
+    'demo_bday_0',
+    'demo_bday_1',
+    'demo_bday_2',
+    'demo_bday_3',
+    'demo_bday_4',
+    'demo_bday_5',
+    'demo_ann_m_0',
+    'demo_ann_f_0',
+    'demo_ann_m_1',
+    'demo_ann_f_1',
+  ];
+
+  /// Purane check/demo members hatao — auto-seed band; delete ke baad wapas nahi.
+  static Future<int> removeOccasionCheckDemos() async {
+    await ensureLoaded();
+    await BoardStore.ensureLoaded();
+    var removed = 0;
+    for (final id in _demoMemberIds) {
+      if (byId(id) == null) continue;
+      await delete(id);
+      removed++;
+    }
+    final demoPosts = BoardStore.current
+        .where((p) => p.title.trim() == 'DEMO · DIRECTOR')
+        .toList();
+    for (final p in demoPosts) {
+      await BoardStore.deletePost(p.id);
+    }
+    return removed;
+  }
 
   static Member? byId(String id) {
     if (id.trim().isEmpty) return null;
@@ -290,7 +447,6 @@ class MemberStore {
     }
   }
 
-  /// Safe spouse label for UI (never show self as spouse).
   static String? spouseDisplayName(Member m) {
     if (!m.hasSpouse || m.spouseId == m.id) return null;
     final s = byId(m.spouseId);

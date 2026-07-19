@@ -49,7 +49,8 @@ class AppTheme {
         style: FilledButton.styleFrom(
           backgroundColor: purple,
           foregroundColor: Colors.white,
-          minimumSize: const Size.fromHeight(48),
+          // Size.fromHeight → width=Infinity; Row ke andar crash/hang.
+          minimumSize: const Size(64, 48),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
       ),

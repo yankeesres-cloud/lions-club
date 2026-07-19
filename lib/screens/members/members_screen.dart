@@ -8,8 +8,10 @@ import '../../models/club_role.dart';
 import '../../models/member.dart';
 import '../../services/member_excel_import.dart';
 import '../../services/member_store.dart';
+import '../../services/star_rating_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/member_photo.dart';
+import '../../widgets/star_rating_view.dart';
 import 'member_form_screen.dart';
 
 class MembersScreen extends StatefulWidget {
@@ -45,10 +47,12 @@ class _MembersScreenState extends State<MembersScreen> {
 
   Future<void> _reload() async {
     try {
-      final list = await MemberStore.load();
+      await MemberStore.ensureLoaded();
+      await MemberStore.relinkOrphanCouples();
+      await StarRatingService.ensureData();
       if (!mounted) return;
       setState(() {
-        _all = list;
+        _all = MemberStore.current;
         _loading = false;
         _error = null;
       });
@@ -58,6 +62,33 @@ class _MembersScreenState extends State<MembersScreen> {
         _loading = false;
         _error = e.toString();
       });
+    }
+  }
+
+  Future<void> _fixCouples() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final before = MemberStore.current
+          .where((m) => m.membershipType == MembershipType.couple)
+          .length;
+      final pairs = await MemberStore.relinkOrphanCouples();
+      await _reload();
+      if (!mounted) return;
+      final after = _all
+          .where((m) => m.membershipType == MembershipType.couple)
+          .length;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            pairs > 0
+                ? 'Couples jod diye · $pairs naye pair · ab Couple: $after'
+                : 'Naya pair nahi mila · Couple members: $after (pehle ~$before)',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -318,6 +349,11 @@ class _MembersScreenState extends State<MembersScreen> {
                         icon: const Icon(Icons.table_view_outlined, size: 18),
                         label: const Text('Template'),
                       ),
+                      OutlinedButton.icon(
+                        onPressed: _busy ? null : _fixCouples,
+                        icon: const Icon(Icons.favorite_outline, size: 18),
+                        label: const Text('Couples jodain'),
+                      ),
                     ],
                   ),
                 const SizedBox(height: 10),
@@ -375,16 +411,22 @@ class _MembersScreenState extends State<MembersScreen> {
                               m.displayName,
                               style: const TextStyle(fontWeight: FontWeight.w700),
                             ),
-                            subtitle: Text(
-                              [
-                                m.gender.label,
-                                m.membershipType.label,
-                                if (m.primaryPhone.isNotEmpty) m.primaryPhone,
-                                if (m.address.trim().isNotEmpty) m.address.trim(),
-                              ].join(' · '),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                StarRatingView(memberId: m.id, compact: true),
+                                Text(
+                                  [
+                                    m.gender.label,
+                                    m.membershipType.label,
+                                    if (m.primaryPhone.isNotEmpty) m.primaryPhone,
+                                  ].join(' · '),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
                             ),
+                            isThreeLine: true,
                             onTap: () => _showDetails(m),
                             trailing: _canEdit
                                 ? PopupMenuButton<String>(
@@ -433,6 +475,29 @@ class _MembersScreenState extends State<MembersScreen> {
                   const SizedBox(height: 12),
                   Center(child: MemberFaceAvatar(member: m, radius: 40)),
                   const SizedBox(height: 12),
+                  Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Club star rating (auto)',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              color: AppTheme.purple,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          StarRatingView(
+                            memberId: m.id,
+                            showBreakdown: true,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                   _detailBlock('Person', [
                     'Name: ${m.name.isEmpty ? '—' : m.name}',
                     'Phone: ${m.phone.isEmpty ? '—' : m.phone}',

@@ -29,8 +29,8 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Member face photo ke liye camera use hota hai.</string>
+	<string>Club wall pe photo message bhejne aur member photo ke liye camera use hota hai.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Member face photo gallery se choose karne ke liye.</string>
+	<string>Club wall / member photo ke liye gallery se image choose karne hetu.</string>
 </dict>
 </plist>

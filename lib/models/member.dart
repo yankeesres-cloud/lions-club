@@ -56,8 +56,33 @@ extension MembershipTypeX on MembershipType {
   String get label => this == MembershipType.couple ? 'Couple' : 'Single';
 
   static MembershipType fromLabel(String? raw) {
-    final t = (raw ?? '').trim().toLowerCase();
-    if (t.contains('couple') || t.contains('दो') || t == 'c') {
+    final t = (raw ?? '')
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s+'), '');
+    if (t.isEmpty) return MembershipType.single;
+    // Excel: S/M, SM = Single
+    if (t == 's/m' ||
+        t == 's-m' ||
+        t == 's_m' ||
+        t == 'sm' ||
+        t == 's' ||
+        t.contains('single') ||
+        t.contains('एकल')) {
+      return MembershipType.single;
+    }
+    // Excel: C/M, CM, C-M, Couple, दो…
+    if (t == 'c/m' ||
+        t == 'c-m' ||
+        t == 'c_m' ||
+        t == 'cm' ||
+        t == 'c' ||
+        t.contains('couple') ||
+        t.contains('दो') ||
+        t == 'cupal' ||
+        t.contains('cupal') ||
+        t.contains('दम्पति') ||
+        t.contains('dampati')) {
       return MembershipType.couple;
     }
     return MembershipType.single;
@@ -94,6 +119,7 @@ class Member {
     this.proposer = '',
     this.membershipType = MembershipType.single,
     this.spouseId = '',
+    this.starRating = 0,
   });
 
   final String id;
@@ -109,6 +135,8 @@ class Member {
   final MembershipType membershipType;
   /// Other person's [Member.id] when couple (pati ↔ patni).
   final String spouseId;
+  /// Club star rating 0–5 (0 = not set).
+  final int starRating;
 
   String get displayName {
     final n = name.trim();
@@ -152,6 +180,21 @@ class Member {
   bool hasBirthdayOn(DateTime day) => _sameMonthDay(dob, day);
 
   bool hasAnniversaryOn(DateTime day) => _sameMonthDay(anniversary, day);
+
+  /// DOB se umr (saal). Galat/missing DOB par null.
+  int? ageYears({DateTime? asOf}) {
+    final d = parseFlexibleDate(dob);
+    if (d == null) return null;
+    final t = asOf ?? DateTime.now();
+    var age = t.year - d.year;
+    if (t.month < d.month || (t.month == d.month && t.day < d.day)) {
+      age--;
+    }
+    if (age < 0 || age > 120) return null;
+    return age;
+  }
+
+  int get stars => starRating.clamp(0, 5);
 
   static bool _sameMonthDay(String raw, DateTime day) {
     final d = parseFlexibleDate(raw);
@@ -201,6 +244,7 @@ class Member {
     String? proposer,
     MembershipType? membershipType,
     String? spouseId,
+    int? starRating,
     bool clearSpouse = false,
   }) {
     return Member(
@@ -216,6 +260,7 @@ class Member {
       proposer: proposer ?? this.proposer,
       membershipType: membershipType ?? this.membershipType,
       spouseId: clearSpouse ? '' : (spouseId ?? this.spouseId),
+      starRating: starRating ?? this.starRating,
     );
   }
 
@@ -232,6 +277,7 @@ class Member {
         'proposer': proposer,
         'membershipType': membershipType.name,
         'spouseId': spouseId,
+        'starRating': stars,
         'v': 2,
       };
 
@@ -262,6 +308,7 @@ class Member {
           (j['membershipType'] ?? j['type'] ?? 'single').toString(),
         ),
         spouseId: (j['spouseId'] ?? '').toString(),
+        starRating: _parseStars(j['starRating'] ?? j['stars']),
       );
     }
 
@@ -280,7 +327,13 @@ class Member {
         (j['membershipType'] ?? j['type'] ?? 'single').toString(),
       ),
       spouseId: (j['spouseId'] ?? '').toString(),
+      starRating: _parseStars(j['starRating'] ?? j['stars']),
     );
+  }
+
+  static int _parseStars(dynamic raw) {
+    if (raw is num) return raw.toInt().clamp(0, 5);
+    return (int.tryParse('$raw') ?? 0).clamp(0, 5);
   }
 
   /// Split a legacy couple JSON row into 1–2 individual members.

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/member.dart';
+import '../services/board_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/member_photo.dart';
 
@@ -11,6 +12,8 @@ Future<Member?> pickClubMember({
   String currentId = '',
   String title = 'Select member',
   bool allowClear = true,
+  /// Desk select: Sabhi + Board — do search / scope.
+  bool dualScopeSearch = false,
 }) async {
   if (members.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -28,6 +31,7 @@ Future<Member?> pickClubMember({
       currentId: currentId,
       title: title,
       allowClear: allowClear,
+      dualScopeSearch: dualScopeSearch,
     ),
   );
 }
@@ -60,65 +64,146 @@ Future<List<String>?> pickClubMembers({
   );
 }
 
+enum _PickScope { all, board }
+
 class _MemberPickDialog extends StatefulWidget {
   const _MemberPickDialog({
     required this.members,
     required this.currentId,
     required this.title,
     required this.allowClear,
+    this.dualScopeSearch = false,
   });
 
   final List<Member> members;
   final String currentId;
   final String title;
   final bool allowClear;
+  final bool dualScopeSearch;
 
   @override
   State<_MemberPickDialog> createState() => _MemberPickDialogState();
 }
 
 class _MemberPickDialogState extends State<_MemberPickDialog> {
-  final _search = TextEditingController();
+  final _searchAll = TextEditingController();
+  final _searchBoard = TextEditingController();
+  _PickScope _scope = _PickScope.all;
 
   @override
   void dispose() {
-    _search.dispose();
+    _searchAll.dispose();
+    _searchBoard.dispose();
     super.dispose();
+  }
+
+  bool _isBoardMember(Member m) =>
+      BoardStore.postsForMember(m.id).isNotEmpty;
+
+  String _boardSubtitle(Member m) {
+    final posts = BoardStore.postsForMember(m.id)
+        .map((p) => p.title.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    final bits = <String>[
+      if (posts.isNotEmpty) posts.join(' · '),
+      m.gender.label,
+      if (m.primaryPhone.isNotEmpty) m.primaryPhone,
+    ];
+    return bits.join(' · ');
+  }
+
+  List<Member> _filtered() {
+    final boardOnly = widget.dualScopeSearch && _scope == _PickScope.board;
+    final q = (boardOnly ? _searchBoard : _searchAll).text.trim().toLowerCase();
+    var list = widget.members.where((m) {
+      if (boardOnly && !_isBoardMember(m)) return false;
+      return m.matchesQuery(q) ||
+          (boardOnly &&
+              BoardStore.postsForMember(m.id).any(
+                (p) => p.title.toLowerCase().contains(q),
+              ));
+    }).toList();
+    list.sort(
+      (a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
+    );
+    return list;
+  }
+
+  Widget _searchField({
+    required TextEditingController controller,
+    required String hint,
+  }) {
+    return TextField(
+      controller: controller,
+      autofocus: true,
+      onChanged: (_) => setState(() {}),
+      decoration: InputDecoration(
+        hintText: hint,
+        prefixIcon: const Icon(Icons.search),
+        border: const OutlineInputBorder(),
+        isDense: true,
+        suffixIcon: controller.text.isEmpty
+            ? null
+            : IconButton(
+                onPressed: () {
+                  controller.clear();
+                  setState(() {});
+                },
+                icon: const Icon(Icons.clear),
+              ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final q = _search.text.trim().toLowerCase();
-    final list = widget.members.where((m) => m.matchesQuery(q)).toList()
-      ..sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+    final list = _filtered();
+    final boardCount =
+        widget.members.where(_isBoardMember).length;
 
     return AlertDialog(
       title: Text(widget.title),
       content: SizedBox(
         width: 480,
-        height: 420,
+        height: widget.dualScopeSearch ? 480 : 420,
         child: Column(
           children: [
-            TextField(
-              controller: _search,
-              autofocus: true,
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                hintText: 'Search…',
-                prefixIcon: const Icon(Icons.search),
-                border: const OutlineInputBorder(),
-                isDense: true,
-                suffixIcon: _search.text.isEmpty
-                    ? null
-                    : IconButton(
-                        onPressed: () {
-                          _search.clear();
-                          setState(() {});
-                        },
-                        icon: const Icon(Icons.clear),
-                      ),
+            if (widget.dualScopeSearch) ...[
+              SegmentedButton<_PickScope>(
+                segments: [
+                  ButtonSegment(
+                    value: _PickScope.all,
+                    label: Text('Sabhi (${widget.members.length})'),
+                    icon: const Icon(Icons.groups_outlined, size: 18),
+                  ),
+                  ButtonSegment(
+                    value: _PickScope.board,
+                    label: Text('Board ($boardCount)'),
+                    icon: const Icon(Icons.badge_outlined, size: 18),
+                  ),
+                ],
+                selected: {_scope},
+                onSelectionChanged: (s) {
+                  setState(() => _scope = s.first);
+                },
               ),
-            ),
+              const SizedBox(height: 10),
+              if (_scope == _PickScope.all)
+                _searchField(
+                  controller: _searchAll,
+                  hint: 'Sabhi members search — naam / phone…',
+                )
+              else
+                _searchField(
+                  controller: _searchBoard,
+                  hint: 'Board members search — naam / post…',
+                ),
+            ] else
+              _searchField(
+                controller: _searchAll,
+                hint: 'Search…',
+              ),
             if (widget.allowClear && widget.currentId.isNotEmpty)
               Align(
                 alignment: Alignment.centerLeft,
@@ -133,7 +218,9 @@ class _MemberPickDialogState extends State<_MemberPickDialog> {
               child: list.isEmpty
                   ? Center(
                       child: Text(
-                        'Koi member nahi',
+                        _scope == _PickScope.board
+                            ? 'Koi board member nahi / search match nahi'
+                            : 'Koi member nahi',
                         style: TextStyle(color: Colors.grey.shade700),
                       ),
                     )
@@ -142,6 +229,7 @@ class _MemberPickDialogState extends State<_MemberPickDialog> {
                       itemBuilder: (_, i) {
                         final m = list[i];
                         final selected = m.id == widget.currentId;
+                        final isBoard = _isBoardMember(m);
                         return ListTile(
                           selected: selected,
                           leading: MemberFaceAvatar(member: m, radius: 18),
@@ -150,14 +238,23 @@ class _MemberPickDialogState extends State<_MemberPickDialog> {
                             style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
                           subtitle: Text(
-                            [
-                              m.gender.label,
-                              if (m.primaryPhone.isNotEmpty) m.primaryPhone,
-                            ].join(' · '),
+                            widget.dualScopeSearch && isBoard
+                                ? _boardSubtitle(m)
+                                : [
+                                    m.gender.label,
+                                    if (m.primaryPhone.isNotEmpty)
+                                      m.primaryPhone,
+                                  ].join(' · '),
                           ),
                           trailing: selected
                               ? const Icon(Icons.check_circle, color: AppTheme.purple)
-                              : null,
+                              : (isBoard && widget.dualScopeSearch
+                                  ? Icon(
+                                      Icons.badge_outlined,
+                                      size: 18,
+                                      color: Colors.grey.shade600,
+                                    )
+                                  : null),
                           onTap: () => Navigator.pop(context, m),
                         );
                       },
@@ -195,15 +292,12 @@ class _MultiMemberPickDialog extends StatefulWidget {
 
 class _MultiMemberPickDialogState extends State<_MultiMemberPickDialog> {
   final _search = TextEditingController();
-  late final Set<String> _selected;
+  late Set<String> _selected;
 
   @override
   void initState() {
     super.initState();
-    _selected = {
-      for (final id in widget.selectedIds)
-        if (id.trim().isNotEmpty) id.trim(),
-    };
+    _selected = {...widget.selectedIds};
   }
 
   @override
@@ -212,12 +306,12 @@ class _MultiMemberPickDialogState extends State<_MultiMemberPickDialog> {
     super.dispose();
   }
 
-  void _toggle(Member m) {
+  void _toggle(String id) {
     setState(() {
-      if (_selected.contains(m.id)) {
-        _selected.remove(m.id);
+      if (_selected.contains(id)) {
+        _selected.remove(id);
       } else if (_selected.length < widget.maxSelection) {
-        _selected.add(m.id);
+        _selected.add(id);
       }
     });
   }
@@ -232,19 +326,9 @@ class _MultiMemberPickDialogState extends State<_MultiMemberPickDialog> {
       title: Text(widget.title),
       content: SizedBox(
         width: 480,
-        height: 440,
+        height: 420,
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              '${_selected.length} / ${widget.maxSelection} select',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: AppTheme.purple,
-                fontSize: 13,
-              ),
-            ),
-            const SizedBox(height: 8),
             TextField(
               controller: _search,
               autofocus: true,
@@ -278,24 +362,16 @@ class _MultiMemberPickDialogState extends State<_MultiMemberPickDialog> {
                       itemCount: list.length,
                       itemBuilder: (_, i) {
                         final m = list[i];
-                        final selected = _selected.contains(m.id);
-                        final atMax =
-                            !selected && _selected.length >= widget.maxSelection;
+                        final on = _selected.contains(m.id);
                         return CheckboxListTile(
-                          value: selected,
-                          onChanged: atMax ? null : (_) => _toggle(m),
+                          value: on,
                           secondary: MemberFaceAvatar(member: m, radius: 18),
                           title: Text(
                             m.displayName,
                             style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
-                          subtitle: Text(
-                            [
-                              m.gender.label,
-                              if (m.primaryPhone.isNotEmpty) m.primaryPhone,
-                            ].join(' · '),
-                          ),
-                          controlAffinity: ListTileControlAffinity.trailing,
+                          subtitle: Text(m.primaryPhone),
+                          onChanged: (_) => _toggle(m.id),
                         );
                       },
                     ),
@@ -308,13 +384,9 @@ class _MultiMemberPickDialogState extends State<_MultiMemberPickDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
-        TextButton(
-          onPressed: () => Navigator.pop(context, <String>[]),
-          child: const Text('Clear'),
-        ),
         FilledButton(
           onPressed: () => Navigator.pop(context, _selected.toList()),
-          child: const Text('Done'),
+          child: Text('OK (${_selected.length})'),
         ),
       ],
     );

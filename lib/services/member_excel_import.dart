@@ -405,9 +405,10 @@ class MemberExcelService {
       final address = cell('address', 9);
       // Proposer: mapped header, else template col 10; skip Couple/Single values.
       var proposer = cell('proposer', 10);
-      final typeRaw = cell('type', 11);
+      var typeRaw = cell('type', 11);
       if (_looksLikeMembershipType(proposer) && !_looksLikeMembershipType(typeRaw)) {
-        // Columns shifted — proposer cell actually held type.
+        // Columns shifted — proposer cell mein C/M / Couple tha.
+        typeRaw = proposer;
         proposer = '';
       }
       if (proposer.isEmpty) {
@@ -442,15 +443,27 @@ class MemberExcelService {
       }
 
       var type = MembershipTypeX.fromLabel(typeRaw);
-      if (typeRaw.isEmpty) {
+      // Proposer column mein bhi kabhi C/M hota hai.
+      if (type == MembershipType.single &&
+          MembershipTypeX.fromLabel(proposer) == MembershipType.couple) {
+        type = MembershipType.couple;
+        if (_looksLikeMembershipType(proposer)) proposer = '';
+      }
+      if (typeRaw.isEmpty && type == MembershipType.single) {
         type = (nameM.isNotEmpty && nameF.isNotEmpty)
             ? MembershipType.couple
             : MembershipType.single;
       }
+      // C/M = couple; S/M = single (dono naam hone par bhi S/M pe single).
+      final isCouple = type == MembershipType.couple ||
+          (type != MembershipType.single &&
+              nameM.isNotEmpty &&
+              nameF.isNotEmpty);
 
-      // Pati / patni = do alag members (linked when both present).
-      final idM = MemberStore.newId();
-      final idF = MemberStore.newId();
+      // Pati / patni = do alag members (stable pair ids for merge/relink).
+      final base = 'xlsx_${_stableRowKey(nameM, nameF, phoneM, phoneF, anniversary)}';
+      final idM = '${base}_m';
+      final idF = '${base}_f';
       final ann = _normalizeDate(anniversary);
       var rowAdded = 0;
 
@@ -465,8 +478,9 @@ class MemberExcelService {
           anniversary: ann,
           address: address,
           proposer: proposer,
-          membershipType: nameF.isNotEmpty ? MembershipType.couple : type,
-          spouseId: nameF.isNotEmpty ? idF : '',
+          membershipType:
+              isCouple && nameF.isNotEmpty ? MembershipType.couple : type,
+          spouseId: isCouple && nameF.isNotEmpty ? idF : '',
         );
         if (m.isSane) {
           members.add(m);
@@ -484,8 +498,9 @@ class MemberExcelService {
           anniversary: ann,
           address: address,
           proposer: proposer,
-          membershipType: nameM.isNotEmpty ? MembershipType.couple : type,
-          spouseId: nameM.isNotEmpty ? idM : '',
+          membershipType:
+              isCouple && nameM.isNotEmpty ? MembershipType.couple : type,
+          spouseId: isCouple && nameM.isNotEmpty ? idM : '',
         );
         if (f.isSane) {
           members.add(f);
@@ -578,7 +593,14 @@ class MemberExcelService {
         map['proposer'] = i;
         continue;
       }
-      if (h.contains('couple') || h.contains('single')) {
+      if (h.contains('couple') ||
+          h.contains('single') ||
+          h == 'c/m' ||
+          h.contains('c/m') ||
+          h.contains('membertype') ||
+          h.contains('member type') ||
+          h.contains('membership') ||
+          (h.contains('type') && !h.contains('propos'))) {
         map['type'] = i;
         continue;
       }
@@ -641,12 +663,19 @@ class MemberExcelService {
   }
 
   static bool _looksLikeMembershipType(String raw) {
-    final t = raw.trim().toLowerCase();
+    final t = raw.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
     if (t.isEmpty) return false;
     return t == 'couple' ||
         t == 'single' ||
+        t == 'c/m' ||
+        t == 'c-m' ||
+        t == 'c_m' ||
+        t == 'cm' ||
+        t == 's/m' ||
+        t == 'sm' ||
         t.contains('couple') ||
         t.contains('single') ||
+        t.contains('cupal') ||
         t.contains('दो') ||
         t == 'c' ||
         t == 's';
@@ -675,6 +704,24 @@ class MemberExcelService {
     final d = Member.parseFlexibleDate(raw);
     if (d != null) return Member.formatDate(d);
     return raw.trim();
+  }
+
+  /// Stable couple row key — re-import pe same ids.
+  static String _stableRowKey(
+    String nameM,
+    String nameF,
+    String phoneM,
+    String phoneF,
+    String anniversary,
+  ) {
+    final raw = [
+      nameM.trim().toLowerCase(),
+      nameF.trim().toLowerCase(),
+      phoneM.replaceAll(RegExp(r'\D'), ''),
+      phoneF.replaceAll(RegExp(r'\D'), ''),
+      anniversary.trim(),
+    ].join('|');
+    return raw.hashCode.toUnsigned(32).toRadixString(16);
   }
 }
 

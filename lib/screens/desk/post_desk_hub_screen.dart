@@ -11,15 +11,18 @@ import '../../models/board_post_role_mapper.dart';
 import '../../services/accounts_store.dart';
 import '../../services/ai_draft_service.dart';
 import '../../services/board_store.dart';
+import '../../services/club_settings_store.dart';
 import '../../services/desk_draft_store.dart';
 import '../../services/gallery_store.dart';
 import '../../services/member_store.dart';
 import '../../services/planner_store.dart';
 import '../../services/session_service.dart';
 import '../../theme/app_theme.dart';
-import '../../widgets/member_picker.dart';
+import '../../widgets/board_notice_box.dart';
+import '../../widgets/date_check_bar.dart';
+import '../../widgets/desk_select_dialog.dart';
 import '../accounts/accounts_screen.dart';
-import '../auth/role_login_screen.dart';
+import '../dashboard/dashboard_screen.dart';
 import '../gallery/gallery_screen.dart';
 import '../shell/main_shell.dart';
 
@@ -65,7 +68,10 @@ class _PostDeskHubScreenState extends State<PostDeskHubScreen> {
       AccountsStore.ensureLoaded(),
       BoardStore.ensureLoaded(),
       MemberStore.ensureLoaded(),
+      ClubSettingsStore.load(),
     ]);
+    // Demo check members auto-seed band — delete ke baad wapas na aayein.
+    await MemberStore.removeOccasionCheckDemos();
     final activity = await DeskDraftStore.loadRecent();
     if (!mounted) return;
     setState(() {
@@ -83,115 +89,140 @@ class _PostDeskHubScreenState extends State<PostDeskHubScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final profile = RoleDeskProfile.forRole(
-      widget.role,
-      boardPostTitle: widget.boardPostTitle,
-    );
-    final tools = profile.tools;
-
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
 
+    final club = ClubSettingsStore.current;
+
+    // AppBar ke neeche Board notice (5 din); neeche club wall.
     return Material(
       color: Colors.transparent,
-      child: RefreshIndicator(
-        onRefresh: _reload,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            _header(profile),
-            const SizedBox(height: 14),
-            _deskSelectorCard(),
-            const SizedBox(height: 14),
-            _missionCard(profile),
-            const SizedBox(height: 14),
-            _sectionTitle('Aapke desk ki jaankari'),
-            const SizedBox(height: 8),
-            ...profile.infoBullets.map(
-              (b) => Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          BoardNoticeBox(
+            userName: widget.userName,
+            memberId: widget.memberId,
+            boardPostTitle: widget.boardPostTitle,
+          ),
+          const DateCheckBar(),
+          Expanded(
+            child: DashboardScreen(
+              role: widget.role,
+              userName: widget.userName,
+              club: club,
+              memberId: widget.memberId,
+              embedded: true,
+              onOpenModule: (m) {
+                if (widget.onOpenModule != null) {
+                  widget.onOpenModule!(m);
+                }
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Legacy pink header — unused.
+  // ignore: unused_element
+  Widget _deskSelectorHeader() {
+    final mid = widget.memberId.trim();
+    final selected = mid.isEmpty ? null : MemberStore.byId(mid);
+    final seats = selected == null
+        ? const <BoardPost>[]
+        : BoardStore.postsForMember(selected.id);
+    final pageName = selected?.displayName.trim().isNotEmpty == true
+        ? selected!.displayName
+        : _deskHolderName;
+    final pagePost = seats.isNotEmpty
+        ? seats.map((p) => p.title).join(' · ')
+        : _deskPostLabel;
+
+    const radius = BorderRadius.only(
+      bottomLeft: Radius.circular(16),
+      bottomRight: Radius.circular(16),
+    );
+
+    return Material(
+      color: Colors.transparent,
+      elevation: 2,
+      shadowColor: Colors.black26,
+      borderRadius: radius,
+      child: InkWell(
+        onTap: _pickMemberForDesk,
+        borderRadius: radius,
+        child: Ink(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 12, 14, 14),
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Color(0xFFC2185B),
+                Color(0xFFE91E63),
+              ],
+            ),
+            borderRadius: radius,
+          ),
+          child: Row(
+            children: [
+              const CircleAvatar(
+                radius: 18,
+                backgroundColor: Colors.white24,
+                child: Icon(Icons.people_outline, color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.check_circle_outline, size: 18, color: AppTheme.purple),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(b, style: const TextStyle(fontSize: 13.5))),
+                    Text(
+                      'Desk select',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white.withValues(alpha: 0.85),
+                      ),
+                    ),
+                    Text(
+                      pageName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 17,
+                      ),
+                    ),
+                    Text(
+                      pagePost,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white.withValues(alpha: 0.9),
+                      ),
+                    ),
                   ],
                 ),
               ),
-            ),
-            if (profile.quickModuleHints.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: profile.quickModuleHints.map((m) {
-                  return ActionChip(
-                    avatar: Icon(m.icon, size: 16, color: AppTheme.purple),
-                    label: Text(m.title),
-                    onPressed: widget.onOpenModule == null
-                        ? null
-                        : () => widget.onOpenModule!(m),
-                  );
-                }).toList(),
+              Icon(
+                Icons.expand_more,
+                color: Colors.white.withValues(alpha: 0.95),
               ),
             ],
-            const SizedBox(height: 18),
-            _sectionTitle('Agami programmes'),
-            const SizedBox(height: 8),
-            _upcomingBlock(),
-            const SizedBox(height: 18),
-            _sectionTitle('Pehle programmes ke photos'),
-            const SizedBox(height: 8),
-            GalleryDeskStrip(
-              photos: _photos,
-              onOpenAll: widget.onOpenModule == null
-                  ? null
-                  : () => widget.onOpenModule!(AppModule.gallery),
-            ),
-            if (_isTreasurer || _seeAll) ...[
-              const SizedBox(height: 18),
-              _sectionTitle('Accounts (Treasurer)'),
-              const SizedBox(height: 8),
-              _accountsPreview(),
-            ],
-            const SizedBox(height: 18),
-            _sectionTitle(
-              widget.role == ClubRole.member
-                  ? 'Anya members / posts ka kaam'
-                  : 'Club desk activity',
-            ),
-            const SizedBox(height: 8),
-            _activityBlock(),
-            const SizedBox(height: 18),
-            _sectionTitle(
-              PostDeskAccess.openAllTemporarily
-                  ? 'Sabhi AI Desk tools (abhi open)'
-                  : (_seeAll ? 'Sabhi AI Desk tools' : 'Mere AI Desk tools'),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              PostDeskAccess.openAllTemporarily
-                  ? 'Abhi sab tools open — baad mein post-wise permission'
-                  : 'AI Assistant aapke post ke hisaab se draft banayega',
-              style: TextStyle(color: Colors.grey.shade700, fontSize: 12.5),
-            ),
-            const SizedBox(height: 10),
-            if (tools.isEmpty)
-              const Card(
-                child: ListTile(title: Text('Is role ke liye koi tool nahi')),
-              )
-            else
-              ...tools.map((d) => _toolTile(d)),
-            const SizedBox(height: 24),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  /// Sirf Members list — board seats bhi inhi mein se hain.
+  /// Compact desk selector (legacy — unused).
+  // ignore: unused_element
   Widget _deskSelectorCard() {
     final mid = widget.memberId.trim();
     final selected = mid.isEmpty ? null : MemberStore.byId(mid);
@@ -199,66 +230,122 @@ class _PostDeskHubScreenState extends State<PostDeskHubScreen> {
         ? const <BoardPost>[]
         : BoardStore.postsForMember(selected.id);
     final seatHint = seats.isEmpty
-        ? 'Member desk'
+        ? (selected == null ? 'Member select karein' : 'Member desk')
         : seats.map((p) => p.title).join(' · ');
+    final name = selected?.displayName ?? 'Member select karein';
 
-    return Card(
+    return Material(
       color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: _pickMemberForDesk,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFE8E2F2)),
+          ),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: AppTheme.purple.withValues(alpha: 0.12),
+                child: const Icon(
+                  Icons.people_outline,
+                  size: 18,
+                  color: AppTheme.purple,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Desk select',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                      ),
+                    ),
+                    Text(
+                      seatHint,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.expand_more, color: Colors.grey.shade700),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _quickActionsCard() {
+    const modules = [
+      AppModule.members,
+      AppModule.officers,
+      AppModule.guests,
+      AppModule.planner,
+      AppModule.dashboard,
+      AppModule.meetings,
+      AppModule.accounts,
+      AppModule.birthday,
+      AppModule.activities,
+      AppModule.gallery,
+      AppModule.directory,
+      AppModule.settings,
+      AppModule.ai,
+    ];
+    final open = widget.onOpenModule;
+    return Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Desk select',
+              'Quick actions',
               style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
             ),
             const SizedBox(height: 4),
             Text(
-              'Members list se select — Board pe jo hain wahi yahan dikhenge',
+              'Modules yahan se kholo — Dashboard pe club wall hai',
               style: TextStyle(color: Colors.grey.shade700, fontSize: 12.5),
             ),
             const SizedBox(height: 10),
-            Material(
-              color: const Color(0xFFF7F5FB),
-              borderRadius: BorderRadius.circular(10),
-              child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: AppTheme.purple.withValues(alpha: 0.12),
-                  child: const Icon(Icons.people_outline, color: AppTheme.purple),
-                ),
-                title: Text(
-                  selected?.displayName ?? 'Member select karein',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-                subtitle: Text(
-                  selected == null
-                      ? 'Club members list'
-                      : seatHint,
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: _pickMemberForDesk,
-              ),
-            ),
-            if (MemberStore.current.isEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                'Members list empty — pehle Members mein Excel load karein',
-                style: TextStyle(color: Colors.grey.shade800, fontSize: 12.5),
-              ),
-            ],
-            const SizedBox(height: 4),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: () {
-                  Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const RoleLoginScreen()),
-                  );
-                },
-                icon: const Icon(Icons.login, size: 18),
-                label: const Text('Login screen'),
-              ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final m in modules)
+                  if (PostDeskAccess.openAllTemporarily ||
+                      widget.role.modules.contains(m))
+                    ActionChip(
+                      avatar: Icon(m.icon, size: 18),
+                      label: Text(m.title),
+                      onPressed: open == null ? null : () => open(m),
+                    ),
+              ],
             ),
           ],
         ),
@@ -267,23 +354,50 @@ class _PostDeskHubScreenState extends State<PostDeskHubScreen> {
   }
 
   Future<void> _pickMemberForDesk() async {
-    // Unique ids — duplicate Dropdown crash avoid
-    final seen = <String>{};
-    final members = <Member>[];
-    for (final m in MemberStore.current) {
-      if (m.id.trim().isEmpty || seen.contains(m.id)) continue;
-      seen.add(m.id);
-      members.add(m);
-    }
-    final selected = await pickClubMember(
+    final picked = await pickDeskPerson(
       context: context,
-      members: members,
-      currentId: widget.memberId,
-      title: 'Member desk select',
-      allowClear: false,
+      currentMemberId: widget.memberId,
     );
-    if (!mounted || selected == null || selected.id.isEmpty) return;
-    await _switchToMember(selected);
+    if (!mounted || picked == null) return;
+
+    if (picked.memberId.trim().isNotEmpty &&
+        (picked.scope == DeskPickScope.member ||
+            picked.scope == DeskPickScope.board ||
+            picked.scope == DeskPickScope.guest)) {
+      final m = MemberStore.byId(picked.memberId);
+      if (m != null) {
+        if (picked.scope == DeskPickScope.board &&
+            picked.boardPostId.trim().isNotEmpty) {
+          final post = BoardStore.byId(picked.boardPostId);
+          if (post != null) {
+            await _switchToPost(post);
+            return;
+          }
+        }
+        await _switchToMember(m);
+        return;
+      }
+    }
+
+    // Guest / any club (no local member) — session by name.
+    final name = picked.displayName.trim().isEmpty
+        ? 'Guest'
+        : picked.displayName.trim();
+    final postTitle = picked.boardPostTitle.trim().isEmpty
+        ? (picked.scope == DeskPickScope.anyClub ? 'Other club' : 'Guest')
+        : picked.boardPostTitle.trim();
+    await SessionService.login(
+      name: name,
+      role: ClubRole.member,
+      memberId: picked.memberId.trim(),
+      boardPostId: picked.boardPostId.trim(),
+      boardPostTitle: postTitle,
+    );
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const MainShell()),
+      (_) => false,
+    );
   }
 
   BoardPost? get _currentPost {
@@ -330,49 +444,65 @@ class _PostDeskHubScreenState extends State<PostDeskHubScreen> {
     final holder = _deskHolderName;
     final postLabel = _deskPostLabel;
     final assigned = _currentPost?.hasMember == true;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppTheme.purple.withValues(alpha: 0.95),
-            AppTheme.purple.withValues(alpha: 0.75),
-          ],
+    // Purple AppBar se chipka — upar flat, neeche round.
+    const radius = BorderRadius.only(
+      bottomLeft: Radius.circular(16),
+      bottomRight: Radius.circular(16),
+    );
+    return Material(
+      color: Colors.transparent,
+      elevation: 2,
+      shadowColor: Colors.black26,
+      borderRadius: radius,
+      child: InkWell(
+        onTap: _pickMemberForDesk,
+        borderRadius: radius,
+        child: Ink(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Color(0xFFC2185B),
+                Color(0xFFE91E63),
+              ],
+            ),
+            borderRadius: radius,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                profile.headline,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '$holder · $postLabel',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.92),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                assigned
+                    ? 'Board post holder · personal desk'
+                    : (widget.boardPostTitle.trim().isEmpty
+                        ? 'Member desk'
+                        : 'Board post vacant · Member desk'),
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.85),
+                  fontSize: 12.5,
+                ),
+              ),
+            ],
+          ),
         ),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            profile.headline,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '$holder · $postLabel',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.92),
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            assigned
-                ? 'Board post holder · personal desk'
-                : (widget.boardPostTitle.trim().isEmpty
-                    ? 'Member desk'
-                    : 'Board post vacant · Member desk'),
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.85),
-              fontSize: 12.5,
-            ),
-          ),
-        ],
       ),
     );
   }
